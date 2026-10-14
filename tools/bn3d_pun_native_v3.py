@@ -31,6 +31,10 @@ RADIUS = 2.7319998741149902
 PUN_SCALE = 2.0
 TARGET_MAX_DIST = 0.5
 POLICIES = ("avs20", "random1", "random2")
+RANDOM100 = "random100"
+RANDOM100_VIEWS = 100
+RANDOM100_SEED = 142
+RANDOM100_SOURCE = WORKSPACE / "outputs/bn3d_pun_v3_v2bright_2000/building1"
 
 
 def obj_vertices(path: Path) -> np.ndarray:
@@ -245,6 +249,88 @@ def save_poses(root: Path, name: str, poses, camera: dict) -> None:
     write_json(root / f"{name}_poses.json", {"camera": camera, "frames": frames})
 
 
+def capture_random100(root: Path, lighting: str, source_root: Path,
+                      seed: int = RANDOM100_SEED) -> None:
+    """Extend the existing random1 capture without running UPNet or AVS."""
+    import torch
+    from config import ExpConfig
+    from nvf.active_mapping.agents.Sampler import SphericalSampler
+
+    if lighting not in ("original", "bright"):
+        raise ValueError(lighting)
+    source = source_root / lighting
+    old = read_json(source / "capture_complete.json")
+    if (old.get("bright_lighting_mode") != "v2"
+            or "random1" not in old.get("policies", [])):
+        raise ValueError("Source must be a completed v2-bright random1 capture")
+    prepare(root)
+    if sha256(root / "asset/House.obj") != sha256(source_root / "asset/House.obj"):
+        raise ValueError("Random100 source and output meshes differ")
+    out = root / lighting
+    if (out / "capture_complete.json").exists():
+        raise FileExistsError(out / "capture_complete.json")
+    source_poses = np.load(source / "random1_poses.npy")
+    eval_poses = np.load(source / "eval_poses.npy")
+    if source_poses.shape != (20, 7) or eval_poses.shape != (40, 4, 4):
+        raise ValueError("Source must contain 20 random1 and 40 evaluation poses")
+    other_light = "bright" if lighting == "original" else "original"
+    if not np.array_equal(source_poses, np.load(source_root / other_light / "random1_poses.npy")):
+        raise ValueError("Source lighting groups use different random1 poses")
+    if not np.array_equal(eval_poses, np.load(source_root / other_light / "eval_poses.npy")):
+        raise ValueError("Source lighting groups use different evaluation poses")
+    camera = read_json(source / "eval_poses.json")["camera"]
+    if camera != read_json(source_root / other_light / "eval_poses.json")["camera"]:
+        raise ValueError("Source lighting groups use different camera intrinsics")
+    cfg = ExpConfig()
+    cfg.radius = cfg.env.radius = RADIUS
+    cfg.object_aabb = torch.tensor([[-1., -1., -1.], [1., 1., 1.]])
+    cfg.target_aabb = cfg.object_aabb.clone()
+    cfg.camera_aabb = cfg.object_aabb * 2.8
+    np.random.seed(seed)
+    additional = SphericalSampler(cfg).sample(RANDOM100_VIEWS - 20).numpy()
+    poses = np.concatenate((source_poses, additional), axis=0)
+    if poses.shape != (RANDOM100_VIEWS, 7) or not np.isfinite(poses).all():
+        raise ValueError("Invalid random100 poses")
+    xyz = poses[:, 4:]
+    distances = np.linalg.norm(xyz[:, None, :] - xyz[None, :, :], axis=-1)
+    np.fill_diagonal(distances, np.inf)
+    if distances.min() < 1e-5:
+        raise ValueError("Duplicate random100 training poses")
+    if np.linalg.norm(xyz[:, None, :] - eval_poses[None, :, :3, 3], axis=-1).min() < 1e-5:
+        raise ValueError("Random100 training pose overlaps evaluation pose")
+    out.mkdir(parents=True, exist_ok=True)
+    save_poses(out, RANDOM100, poses, camera)
+    for name in ("eval_poses.npy", "eval_poses.json"):
+        shutil.copy2(source / name, out / name)
+    for i in range(20):
+        src = source / "training/random1/rgba" / f"{i:04d}.png"
+        dst = out / "training" / RANDOM100 / "rgba" / f"{i:04d}.png"
+        dst.parent.mkdir(parents=True, exist_ok=True)
+        with Image.open(src) as image:
+            if image.mode != "RGBA" or image.size != (512, 512) or not np.any(np.asarray(image)[..., 3]):
+                raise ValueError(f"Invalid source training image: {src}")
+        shutil.copy2(src, dst)
+    for folder in ("rgba", "rgb_black", "mask"):
+        target = out / "eval" / folder
+        target.mkdir(parents=True, exist_ok=True)
+        for i in range(40):
+            src = source / "eval" / folder / f"{i:04d}.png"
+            if not src.is_file():
+                raise FileNotFoundError(src)
+            shutil.copy2(src, target / src.name)
+    write_json(out / "selection_complete.json", {
+        "lighting": lighting, "selection_method": "random", "seed": seed,
+        "num_training_views": RANDOM100_VIEWS, "policies": [RANDOM100],
+        "bright_lighting_mode": "v2", "states": [old["states"][-1]],
+        "native_second_renderer_samples": old["native_second_renderer_samples"],
+        "training_mesh_radius": old["training_mesh_radius"],
+        "source_capture": str(source),
+        "source_random1_poses_sha256": sha256(source / "random1_poses.npy"),
+        "source_eval_poses_sha256": sha256(source / "eval_poses.npy"),
+        "additional_random_seed": seed,
+    })
+
+
 def capture(root: Path, lighting: str, seed: int, samples: int | None,
             bright_lighting: str = "v3", random_groups: int = 2) -> None:
     """Run native PUN online selection, then its second Blender renderer."""
@@ -417,7 +503,7 @@ def render_batch(root: Path, lighting: str, split: str, start: int, count: int) 
     if split != "eval" and split not in record.get("policies", POLICIES):
         raise ValueError(f"Policy was not captured: {split}")
     bright_lighting = record.get("bright_lighting_mode", "v3")
-    total = 40 if split == "eval" else 20
+    total = 40 if split == "eval" else int(record.get("num_training_views", 20))
     if start < 0 or count < 1 or start + count > total:
         raise ValueError("Invalid render batch")
     model_path = prepare(root)
@@ -504,7 +590,8 @@ def finalize_capture(root: Path, lighting: str) -> None:
     out = root / lighting
     selection = read_json(out / "selection_complete.json")
     policies = selection.get("policies", POLICIES)
-    for split, total in [(policy, 20) for policy in policies] + [("eval", 40)]:
+    training_views = int(selection.get("num_training_views", 20))
+    for split, total in [(policy, training_views) for policy in policies] + [("eval", 40)]:
         for i in range(total):
             file = out / ("eval/rgba" if split == "eval" else f"training/{split}/rgba") / f"{i:04d}.png"
             with Image.open(file) as image:
@@ -516,12 +603,12 @@ def finalize_capture(root: Path, lighting: str) -> None:
                     if not (out / "eval" / folder / f"{i:04d}.png").is_file():
                         raise FileNotFoundError(f"Missing eval {folder} for view {i}")
     for policy in policies:
-        paths = [out / "training" / policy / "rgba" / f"{i:04d}.png" for i in range(20)]
+        paths = [out / "training" / policy / "rgba" / f"{i:04d}.png" for i in range(training_views)]
         sheet = out / policy / "selected_contact_sheet.png"
         sheet.parent.mkdir(parents=True, exist_ok=True)
-        contact_sheet(paths, [str(i + 1) for i in range(20)], sheet)
+        contact_sheet(paths, [str(i + 1) for i in range(training_views)], sheet)
         with Image.open(sheet) as image:
-            if image.size != (960, 864):
+            if image.size != (960, ((training_views + 4) // 5) * 216):
                 raise ValueError(f"Invalid contact sheet: {sheet}")
     write_json(out / "projection_report.json", projection_report(root, lighting))
     write_json(out / "capture_complete.json", selection)
@@ -568,14 +655,16 @@ def preview(root: Path, lighting: str, seed: int, bright_lighting: str = "v3") -
 
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("command", choices=("prepare", "preview", "capture", "render", "finalize"))
+    parser.add_argument("command", choices=("prepare", "preview", "capture", "capture-random100", "render", "finalize"))
     parser.add_argument("--root", type=Path, default=DEFAULT_ROOT)
     parser.add_argument("--lighting", choices=("original", "bright"))
     parser.add_argument("--seed", type=int, default=42)
     parser.add_argument("--bright-lighting", choices=("v2", "v3"), default="v3")
     parser.add_argument("--random-groups", type=int, choices=(2, 3), default=2)
+    parser.add_argument("--source-root", type=Path, default=RANDOM100_SOURCE)
+    parser.add_argument("--random-seed", type=int, default=RANDOM100_SEED)
     parser.add_argument("--samples", type=int, help="Debug override for PUN ShapeNetScene Cycles samples; omit for native 10000")
-    parser.add_argument("--split", choices=(*POLICIES, "random3", "eval"))
+    parser.add_argument("--split", choices=(*POLICIES, "random3", RANDOM100, "eval"))
     parser.add_argument("--start", type=int, default=0)
     parser.add_argument("--count", type=int, default=10)
     args = parser.parse_args()
@@ -593,6 +682,11 @@ def main() -> None:
         if args.lighting is None:
             parser.error("finalize requires --lighting")
         finalize_capture(args.root.resolve(), args.lighting)
+    elif args.command == "capture-random100":
+        if args.lighting is None:
+            parser.error("capture-random100 requires --lighting")
+        capture_random100(args.root.resolve(), args.lighting,
+                          args.source_root.resolve(), args.random_seed)
     else:
         if args.lighting is None:
             parser.error("capture requires --lighting")

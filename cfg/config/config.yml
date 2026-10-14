@@ -2,11 +2,11 @@
 _target: !!python/name:nvf.nerfstudio_interface.nbv_trainer.NBVTrainer ''
 data: !!python/object/apply:pathlib.PosixPath
 - /
-- attached
-- remote-home2
-- zzq
-- data
-- github
+- mnt
+- scratch
+- imos-students
+- ke
+- PUN
 - PUN
 - outputs
 - pipeline
@@ -98,11 +98,11 @@ pipeline: !!python/object:nerfstudio.pipelines.dynamic_batch.DynamicBatchPipelin
     collate_fn: !!python/name:nerfstudio.data.utils.nerfstudio_collate.nerfstudio_collate ''
     data: !!python/object/apply:pathlib.PosixPath
     - /
-    - attached
-    - remote-home2
-    - zzq
-    - data
-    - github
+    - mnt
+    - scratch
+    - imos-students
+    - ke
+    - PUN
     - PUN
     - outputs
     - pipeline
@@ -111,11 +111,11 @@ pipeline: !!python/object:nerfstudio.pipelines.dynamic_batch.DynamicBatchPipelin
       _target: !!python/name:nvf.nerfstudio_interface.nbv_dataparser.NBVDataParser ''
       data: !!python/object/apply:pathlib.PosixPath
       - /
-      - attached
-      - remote-home2
-      - zzq
-      - data
-      - github
+      - mnt
+      - scratch
+      - imos-students
+      - ke
+      - PUN
       - PUN
       - outputs
       - pipeline

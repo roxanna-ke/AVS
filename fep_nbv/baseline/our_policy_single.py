@@ -15,6 +15,7 @@ import re
 import timm
 import argparse
 import torch
+from PIL import Image
 os.environ['CUDA_LAUNCH_BLOCKING'] = "1"
 
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
@@ -33,7 +34,7 @@ from fep_nbv.utils.utils import *
 from fep_nbv.env.utils import * # 什么鬼啊
 from fep_nbv.env.shapenet_env import set_env
 from fep_nbv.utils.generate_viewpoints import generate_HEALPix_viewpoints,generate_fibonacci_viewpoints,generate_polar_viewpoints,index2pose_HEALPix
-from fep_nbv.visualization.uncertainty_distribution_visualization import * 
+# from fep_nbv.visualization.uncertainty_distribution_visualization import * 
 from nvf.metric.MetricTracker import RefMetricTracker
 from regress_model import ViTRegressor  # 你的 ViT 回归模型定义
 from blender_utils import blender_interface
@@ -387,6 +388,38 @@ if __name__=='__main__':
             print(pose_his)
             # sys.exit(1)
             # continue
+            # ===== Save AVS results immediately =====
+            avs_save_dir = os.path.join(
+                root_path,
+                "data/test/avs_saved",
+                category,
+                model_index,
+                f"{select_method}_{delete_method}",
+                mode,
+            )
+            os.makedirs(avs_save_dir, exist_ok=True)
+
+            # Save 20 camera poses
+            pose_tensor = torch.stack(pose_his, dim=0)
+            np.savetxt(
+                os.path.join(avs_save_dir, "pose_his_20.txt"),
+                pose_tensor.detach().cpu().numpy(),
+            )
+
+            # Save 20 selected RGB observations
+            for i, obs in enumerate(obs_his):
+                img = np.asarray(obs)
+
+                if img.dtype != np.uint8:
+                    img = np.clip(img, 0.0, 1.0)
+                    img = (img * 255).astype(np.uint8)
+
+                Image.fromarray(img).save(
+                    os.path.join(avs_save_dir, f"obs_{i:02d}.png")
+                )
+
+            print(f"Saved AVS poses and images to: {avs_save_dir}")
+            # ========================================
 
             env = set_env(cfg)
             cfg.exp_name = f'data/test/policy_nn/{category}/{model_index}/{select_method}_{delete_method}/{mode}'
