@@ -5,6 +5,7 @@ import argparse
 import hashlib
 import os
 import random
+import re
 import sys
 from pathlib import Path
 from types import SimpleNamespace
@@ -223,7 +224,7 @@ def full_geometry(tracker, mapper, mesh, poses, imported_axis_matrix) -> dict:
             "axis_transform": "asset_manifest.imported_axis_matrix"}
 
 
-def run_one(root: Path, lighting: str, iterations: int, seed: int) -> None:
+def run_one(root: Path, lighting: str, iterations: int, seed: int, attempt: str = "") -> None:
     import torch
     import trimesh
     import wandb
@@ -235,9 +236,17 @@ def run_one(root: Path, lighting: str, iterations: int, seed: int) -> None:
         raise ValueError("Supported trajectories: 2000 and 20000 steps")
     validate_pair(root)
     data = validate_capture(root, lighting)
-    run = root / "runs_reference" / lighting / str(iterations)
+    run_base = root / "runs_reference" / lighting / str(iterations)
+    run = run_base
+    if run_base.exists():
+        if (run_base / "complete.json").is_file():
+            raise FileExistsError(f"Trajectory is already complete: {run_base}")
+        safe_attempt = re.sub(r"[^A-Za-z0-9_.-]+", "_", attempt).strip("._-")
+        if not safe_attempt:
+            raise FileExistsError(f"Incomplete run exists; supply a unique --attempt: {run_base}")
+        run = run_base / "attempts" / safe_attempt
     if run.exists():
-        raise FileExistsError(f"Use a fresh run directory: {run}")
+        raise FileExistsError(f"Attempt directory already exists: {run}")
     if not torch.cuda.is_available():
         raise RuntimeError("PUN Instant-NGP training requires CUDA")
     if os.environ.get("WANDB_MODE", "online") == "offline":
@@ -345,8 +354,9 @@ def main() -> None:
     parser.add_argument("--lighting", choices=("original", "bright"), required=True)
     parser.add_argument("--iterations", type=int, choices=(2000, 20000), required=True)
     parser.add_argument("--seed", type=int, default=42)
+    parser.add_argument("--attempt", default="")
     args = parser.parse_args()
-    run_one(args.root.resolve(), args.lighting, args.iterations, args.seed)
+    run_one(args.root.resolve(), args.lighting, args.iterations, args.seed, args.attempt)
 
 
 if __name__ == "__main__":

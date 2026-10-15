@@ -20,20 +20,18 @@ case "${1:-}" in
     }
     export WANDB_MODE=online
     export WANDB_PROJECT="${WANDB_PROJECT:-bn3d-pun-reference}"
+    attempt="${BN3D_RUN_ATTEMPT:-${RUNAI_JOB_NAME:-manual-$(date +%Y%m%d-%H%M%S)}}"
     cd "$REPO"
     "$PY" -B -c 'import wandb; print("wandb", wandb.__version__)'
     for steps in 2000 20000; do
       for light in original bright; do
         run="$CAPTURE/runs_reference/$light/$steps"
-        if [[ -f "$run/complete.json" ]]; then
+        if [[ -f "$run/complete.json" ]] || compgen -G "$run/attempts/*/complete.json" >/dev/null; then
           echo "Already complete: $run"
           continue
         fi
-        [[ ! -e "$run" ]] || {
-          echo "Incomplete run exists; inspect it before retrying: $run" >&2; exit 1;
-        }
         "$PY" -B tools/bn3d_pun_reference_run.py --root "$CAPTURE" \
-          --lighting "$light" --iterations "$steps" --seed 42
+          --lighting "$light" --iterations "$steps" --seed 42 --attempt "$attempt"
       done
     done
     ;;
@@ -59,6 +57,7 @@ case "${1:-}" in
       --environment "CLUSTER_USER_ID=${CLUSTER_USER_ID:-308061}" \
       --environment "CLUSTER_GROUP_NAME=${CLUSTER_GROUP_NAME:-imos}" \
       --environment "CLUSTER_GROUP_ID=${CLUSTER_GROUP_ID:-79821}" \
+      --environment "BN3D_RUN_ATTEMPT=$job_name" \
       --existing-pvc "claimname=${SCRATCH_PVC:-imos-scratch},path=/mnt/scratch" \
       --existing-pvc "claimname=${HOME_PVC:-home},path=/mnt/home" \
       --environment "WANDB_API_KEY=$WANDB_API_KEY" \
