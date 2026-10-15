@@ -230,16 +230,19 @@ def train_eval(root: Path, lighting: str, policy: str, seed: int,
     mapper.fov = cfg.env.fov
     mapper.train_img_size = cfg.env.resolution
     config_path = mapper.initialize_config(str(run), str(run / "dataset"), model=cfg.model)
-    mapper.reset()
+    # initialize_config uses PUN's fixed 10000-step instant-ngp schedule.
+    # Set both limits before reset rebuilds the optimizer and its scheduler.
     mapper.config.max_num_iterations = cfg.train_iter
+    mapper.config.optimizers["fields"]["scheduler"].max_steps = cfg.train_iter
+    mapper.reset()
     set_params(cfg, mapper)
     mapper.trainer.pipeline.model.renderer_entropy.set_iteration(0)
-    # PUN changes max_num_iterations after initialize_config writes YAML.
-    # Preserve the effective configuration as well as its native YAML.
+    # Preserve the effective configuration as well as PUN's initial YAML.
     import yaml
     (run / "effective_config.yml").write_text(yaml.dump(mapper.config))
     write_json(run / "run_manifest.json", {"lighting": lighting, "policy": policy,
         "seed": seed, "training_iterations": iterations, "eval_limit": eval_limit,
+        "field_scheduler_max_steps": mapper.config.optimizers["fields"]["scheduler"].max_steps,
         "runs_dir": runs_dir, "num_training_views": num_training_views,
         "train_diagnostics": train_diagnostics,
         "native_config": config_path,

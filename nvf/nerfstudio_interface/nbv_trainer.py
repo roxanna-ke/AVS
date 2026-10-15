@@ -71,6 +71,7 @@ class NBVTrainer(Trainer):
     base_log_dir = 'results/log'
     nvf_use_var = False
     nvf_use_var_factor = 0.01
+    milestone_callback = None
 
     def __init__(
         self, config: NBVTrainerConfig, local_rank: int = 0, world_size: int = 0, init_step=30
@@ -256,6 +257,10 @@ class NBVTrainer(Trainer):
                 save_init_checkpoint(self.config_home, self)
             
             writer.write_out_storage()
+            # Optional experiment hook. The training loop remains one continuous
+            # PUN run; a callback is only invoked after a completed optimizer step.
+            if self.milestone_callback is not None:
+                self.milestone_callback(step + 1)
         # save checkpoint at the end of training
         self.save_checkpoint(step)
 
